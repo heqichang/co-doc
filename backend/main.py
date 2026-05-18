@@ -1,7 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import Base, engine
-from app.routers import auth, documents, upload
+from fastapi import Query
+from app.database import Base, engine, get_db
+from app.routers import auth, documents, upload, permissions, comments
+from app.websockets.collaboration import handle_collaboration
 
 Base.metadata.create_all(bind=engine)
 
@@ -18,6 +20,20 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(upload.router)
+app.include_router(permissions.router)
+app.include_router(comments.router)
+
+@app.websocket("/ws/collaborate/{document_id}")
+async def websocket_collaboration(
+    websocket: WebSocket,
+    document_id: int,
+    token: str = Query(...)
+):
+    db = next(get_db())
+    try:
+        await handle_collaboration(websocket, document_id, token, db)
+    finally:
+        db.close()
 
 @app.get("/")
 def root():

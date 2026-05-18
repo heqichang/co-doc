@@ -51,6 +51,14 @@ export default function App() {
           </PrivateRoute>
         }
       />
+      <Route
+        path="/share/:token"
+        element={
+          <PrivateRoute>
+            <Editor />
+          </PrivateRoute>
+        }
+      />
     </Routes>
   )
 }

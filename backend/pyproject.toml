@@ -18,4 +18,8 @@ dependencies = [
     "python-multipart==0.0.9",
     "sqlalchemy==2.0.29",
     "uvicorn[standard]==0.29.0",
+    "redis==5.0.3",
+    "websockets==12.0",
+    "aioredis==2.0.1",
+    "passlib[bcrypt]==1.7.4",
 ]

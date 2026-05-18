@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     minio_bucket: str = "codoc"
     minio_secure: bool = False
     
+    redis_url: str = "redis://localhost:6379/0"
+    
     class Config:
         env_file = ".env"
 
