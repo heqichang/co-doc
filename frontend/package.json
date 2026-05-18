@@ -13,7 +13,8 @@
     "yjs": "^13.6.14",
     "y-quill": "^0.1.5",
     "y-websocket": "^1.5.4",
-    "quill-cursors": "^4.0.3"
+    "quill-cursors": "^4.0.3",
+    "js-base64": "^3.7.7"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.0",

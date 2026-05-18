@@ -2,10 +2,15 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
+import * as Y from 'yjs'
+import { QuillBinding } from 'y-quill'
+import Quill from 'quill'
+import QuillCursors from 'quill-cursors'
+import { fromUint8Array, toUint8Array } from 'js-base64'
 import { documentAPI, uploadAPI, permissionAPI, commentAPI } from '../utils/api'
-import { useCollaboration } from '../hooks/useCollaboration'
-import { collaborationManager } from '../utils/collaboration'
 import '../styles/editor.css'
+
+Quill.register('modules/cursors', QuillCursors)
 
 const modules = {
   toolbar: [
@@ -59,6 +64,15 @@ function imageHandler(quill) {
   }
 }
 
+const COLORS = [
+  '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+  '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
+]
+
+function getUserColor(userId) {
+  return COLORS[userId % COLORS.length]
+}
+
 export default function Editor() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -66,7 +80,6 @@ export default function Editor() {
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState(null)
   const [userRole, setUserRole] = useState('viewer')
-  const [userColor, setUserColor] = useState('#4ECDC4')
   const [showShareModal, setShowShareModal] = useState(false)
   const [showComments, setShowComments] = useState(false)
   const [comments, setComments] = useState([])
@@ -75,11 +88,18 @@ export default function Editor() {
   const [permissions, setPermissions] = useState([])
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('viewer')
+  const [connected, setConnected] = useState(false)
+  const [collaborators, setCollaborators] = useState([])
   
   const quillRef = useRef(null)
   const quillInstanceRef = useRef(null)
+  const ydocRef = useRef(null)
+  const bindingRef = useRef(null)
+  const wsRef = useRef(null)
+  const awarenessRef = useRef(new Map())
   const titleInputRef = useRef(null)
   const lastTitleSaveRef = useRef(Date.now())
+  const reconnectTimerRef = useRef(null)
 
   useEffect(() => {
     const userStr = localStorage.getItem('user')
@@ -93,12 +113,206 @@ export default function Editor() {
   const canEdit = userRole === 'owner' || userRole === 'editor'
   const canComment = canEdit || userRole === 'commenter'
 
-  const { connected, collaborators, notifications } = useCollaboration(
-    id,
-    localStorage.getItem('token'),
-    quillInstanceRef.current,
-    user ? { ...user, color: userColor } : null
-  )
+  const cleanupCollaboration = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+    
+    if (bindingRef.current) {
+      try {
+        bindingRef.current.destroy()
+      } catch (e) {}
+      bindingRef.current = null
+    }
+    if (ydocRef.current) {
+      try {
+        ydocRef.current.destroy()
+      } catch (e) {}
+      ydocRef.current = null
+    }
+    if (wsRef.current) {
+      try {
+        wsRef.current.close()
+      } catch (e) {}
+      wsRef.current = null
+    }
+    awarenessRef.current.clear()
+    setCollaborators([])
+  }, [])
+
+  const broadcastAwareness = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !user) return
+    
+    const selection = quillInstanceRef.current?.getSelection()
+    const awarenessMsg = {
+      type: 'awareness',
+      data: {
+        user: {
+          id: user.id,
+          name: user.nickname,
+          avatar: user.avatar,
+          color: getUserColor(user.id)
+        },
+        selection: selection || null
+      }
+    }
+    wsRef.current.send(JSON.stringify(awarenessMsg))
+  }, [user])
+
+  const initCollaboration = useCallback((quill, docContent) => {
+    if (!id || !user) return
+
+    try {
+      cleanupCollaboration()
+
+      const ydoc = new Y.Doc()
+      ydocRef.current = ydoc
+
+      const ytext = ydoc.getText('quill')
+      
+      if (docContent && ytext.length === 0) {
+        const tempDiv = document.createElement('div')
+        tempDiv.innerHTML = docContent
+        const plainText = tempDiv.innerText || tempDiv.textContent || ''
+        if (plainText.length > 0) {
+          ytext.insert(0, plainText)
+        }
+      }
+
+      const binding = new QuillBinding(ytext, quill)
+      bindingRef.current = binding
+
+      const token = localStorage.getItem('token')
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const wsUrl = `${wsProtocol}//${window.location.host}/ws/collaborate/${id}?token=${token}`
+
+      const connectWS = () => {
+        const ws = new WebSocket(wsUrl)
+        wsRef.current = ws
+
+        ws.onopen = () => {
+          console.log('WebSocket 已连接')
+          setConnected(true)
+          broadcastAwareness()
+        }
+
+        ws.onclose = () => {
+          console.log('WebSocket 已断开')
+          setConnected(false)
+          awarenessRef.current.clear()
+          setCollaborators([])
+          
+          reconnectTimerRef.current = setTimeout(() => {
+            connectWS()
+          }, 3000)
+        }
+
+        ws.onerror = (error) => {
+          console.error('WebSocket 错误:', error)
+          setConnected(false)
+        }
+
+        ws.onmessage = (event) => {
+          try {
+            if (event.data instanceof Blob) {
+              const reader = new FileReader()
+              reader.onload = () => {
+                try {
+                  const arrayBuffer = reader.result
+                  const update = new Uint8Array(arrayBuffer)
+                  Y.applyUpdate(ydoc, update)
+                } catch (e) {
+                  console.error('应用更新失败:', e)
+                }
+              }
+              reader.readAsArrayBuffer(event.data)
+            } else if (typeof event.data === 'string') {
+              const message = JSON.parse(event.data)
+              
+              if (message.type === 'awareness') {
+                const { user: collabUser, selection } = message.data
+                if (collabUser && collabUser.id !== user.id) {
+                  awarenessRef.current.set(collabUser.id, {
+                    ...collabUser,
+                    selection,
+                    lastUpdate: Date.now()
+                  })
+                  
+                  const collabList = Array.from(awarenessRef.current.values())
+                  setCollaborators(collabList)
+                  
+                  const cursors = quill.getModule('cursors')
+                  if (cursors) {
+                    const range = selection ? {
+                      index: selection.index,
+                      length: selection.length || 0
+                    } : null
+                    cursors.createCursor(
+                      collabUser.id.toString(),
+                      collabUser.name,
+                      collabUser.color
+                    )
+                    if (range) {
+                      cursors.moveCursor(collabUser.id.toString(), range)
+                    } else {
+                      cursors.removeCursor(collabUser.id.toString())
+                    }
+                  }
+                }
+              } else if (message.type === 'sync_step1') {
+                const stateVector = toUint8Array(message.data)
+                const update = Y.encodeStateAsUpdate(ydoc, stateVector)
+                ws.send(JSON.stringify({
+                  type: 'sync_step2',
+                  data: fromUint8Array(update)
+                }))
+              } else if (message.type === 'sync_step2') {
+                const update = toUint8Array(message.data)
+                Y.applyUpdate(ydoc, update)
+              }
+            }
+          } catch (e) {
+            console.error('处理消息失败:', e)
+          }
+        }
+      }
+
+      connectWS()
+
+      ydoc.on('update', (update, origin) => {
+        if (origin !== 'remote' && wsRef.current?.readyState === WebSocket.OPEN) {
+          try {
+            wsRef.current.send(update)
+          } catch (e) {
+            console.error('发送更新失败:', e)
+          }
+        }
+      })
+
+      quill.on('selection-change', () => {
+        broadcastAwareness()
+      })
+
+      setInterval(() => {
+        const now = Date.now()
+        awarenessRef.current.forEach((value, key) => {
+          if (now - value.lastUpdate > 30000) {
+            awarenessRef.current.delete(key)
+            const cursors = quill.getModule('cursors')
+            if (cursors) {
+              cursors.removeCursor(key.toString())
+            }
+          }
+        })
+        const collabList = Array.from(awarenessRef.current.values())
+        setCollaborators(collabList)
+      }, 10000)
+
+    } catch (error) {
+      console.error('初始化协作失败:', error)
+    }
+  }, [id, user, cleanupCollaboration, broadcastAwareness])
 
   useEffect(() => {
     const loadDocument = async () => {
@@ -109,31 +323,55 @@ export default function Editor() {
         const doc = response.data
         setTitle(doc.title)
         setUserRole(doc.user_role || 'viewer')
+        setLoading(false)
         
-        if (quillRef.current) {
+        if (quillRef.current && !quillInstanceRef.current) {
           const quill = quillRef.current.getEditor()
           quillInstanceRef.current = quill
-          
-          if (doc.content) {
-            quill.root.innerHTML = doc.content
-          }
           
           quill.getModule('toolbar').addHandler('image', () => imageHandler(quill))
           
           if (!canEdit) {
             quill.disable()
           }
+          
+          initCollaboration(quill, doc.content)
         }
       } catch (err) {
         console.error('加载文档失败:', err)
         alert('加载文档失败')
         navigate('/documents')
-      } finally {
-        setLoading(false)
       }
     }
     loadDocument()
-  }, [id, navigate, user, canEdit])
+
+    return () => {
+      cleanupCollaboration()
+    }
+  }, [id, navigate, user, canEdit, cleanupCollaboration, initCollaboration])
+
+  useEffect(() => {
+    if (loading || !quillRef.current || quillInstanceRef.current || !user) return
+
+    const timer = setTimeout(() => {
+      if (quillRef.current && !quillInstanceRef.current) {
+        const quill = quillRef.current.getEditor()
+        quillInstanceRef.current = quill
+        
+        quill.getModule('toolbar').addHandler('image', () => imageHandler(quill))
+        
+        if (!canEdit) {
+          quill.disable()
+        }
+        
+        documentAPI.get(id).then(response => {
+          initCollaboration(quill, response.data.content)
+        })
+      }
+    }, 100)
+
+    return () => clearTimeout(timer)
+  }, [loading, user, canEdit, id, initCollaboration])
 
   useEffect(() => {
     const loadComments = async () => {
@@ -306,7 +544,7 @@ export default function Editor() {
           <div className="collaborators">
             {collaborators.map((collab) => (
               <div
-                key={collab.clientId}
+                key={collab.id}
                 className="collaborator-avatar"
                 style={{ backgroundColor: collab.color }}
                 title={collab.name}
@@ -519,16 +757,6 @@ export default function Editor() {
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {notifications.length > 0 && (
-        <div className="notifications">
-          {notifications.slice(-3).map((notif, index) => (
-            <div key={index} className="notification">
-              {notif.data?.message || JSON.stringify(notif.data)}
-            </div>
-          ))}
         </div>
       )}
     </div>
