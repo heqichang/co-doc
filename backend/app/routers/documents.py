@@ -91,6 +91,7 @@ def update_document(
 @router.delete("/{doc_id}")
 def delete_document(
     doc_id: int,
+    permanent: bool = Query(False, description="是否彻底删除"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -104,6 +105,11 @@ def delete_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="文档不存在"
         )
+    
+    if permanent:
+        db.delete(doc)
+        db.commit()
+        return {"message": "文档已彻底删除"}
     
     doc.is_deleted = True
     db.commit()

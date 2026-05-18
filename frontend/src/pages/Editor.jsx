@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactQuill from 'react-quill'
 import 'react-quill/dist/quill.snow.css'
@@ -30,6 +30,45 @@ const formats = [
   'color', 'background',
   'link', 'image'
 ]
+
+function imageHandler() {
+  const input = document.createElement('input')
+  input.setAttribute('type', 'file')
+  input.setAttribute('accept', 'image/*')
+  input.click()
+
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+
+    try {
+      const response = await uploadAPI.image(file)
+      const url = response.data.url
+      const quillEditor = document.querySelector('.ql-editor')
+      if (quillEditor) {
+        const quillInstance = window.quillRef?.getEditor()
+        if (quillInstance) {
+          const range = quillInstance.getSelection()
+          if (range) {
+            quillInstance.insertEmbed(range.index, 'image', url)
+          }
+        }
+      }
+    } catch (err) {
+      alert('图片上传失败，请检查 MinIO 服务是否开启')
+    }
+  }
+}
+
+const modulesWithImage = {
+  ...modules,
+  toolbar: {
+    container: modules.toolbar,
+    handlers: {
+      image: imageHandler
+    }
+  }
+}
 
 export default function Editor() {
   const { id } = useParams()
@@ -109,45 +148,6 @@ export default function Editor() {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [handleManualSave])
-
-  const imageHandler = () => {
-    const input = document.createElement('input')
-    input.setAttribute('type', 'file')
-    input.setAttribute('accept', 'image/*')
-    input.click()
-
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) return
-
-      try {
-        const response = await uploadAPI.image(file)
-        const url = response.data.url
-        const quill = document.querySelector('.ql-editor')
-        if (quill) {
-          const quillInstance = window.quillRef?.getEditor()
-          if (quillInstance) {
-            const range = quillInstance.getSelection()
-            if (range) {
-              quillInstance.insertEmbed(range.index, 'image', url)
-            }
-          }
-        }
-      } catch (err) {
-        alert('图片上传失败，请检查 MinIO 服务是否开启')
-      }
-    }
-  }
-
-  const modulesWithImage = {
-    ...modules,
-    toolbar: {
-      container: modules.toolbar,
-      handlers: {
-        image: imageHandler
-      }
-    }
-  }
 
   const getStatusText = () => {
     switch (saveStatus) {

@@ -30,7 +30,14 @@ export function useDebounce(callback, delay) {
 
 export function useLocalStorage(key, initialValue) {
   const storedValue = localStorage.getItem(key)
-  const value = storedValue ? JSON.parse(storedValue) : initialValue
+  let value = initialValue
+  if (storedValue !== null) {
+    try {
+      value = JSON.parse(storedValue)
+    } catch {
+      value = storedValue
+    }
+  }
 
   const setValue = (newValue) => {
     if (newValue === null || newValue === undefined) {

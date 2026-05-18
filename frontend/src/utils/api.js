@@ -37,7 +37,7 @@ export const documentAPI = {
   list: (params) => api.get('/documents', { params }),
   get: (id) => api.get(`/documents/${id}`),
   update: (id, data) => api.put(`/documents/${id}`, data),
-  delete: (id) => api.delete(`/documents/${id}`),
+  delete: (id, permanent = false) => api.delete(`/documents/${id}`, { params: { permanent } }),
   restore: (id) => api.post(`/documents/${id}/restore`)
 }
 

@@ -50,9 +50,9 @@ export default function DocumentList() {
   const handleDelete = async (doc, e) => {
     e.stopPropagation()
     if (doc.is_deleted) {
-      if (!confirm('确定要彻底删除这个文档吗？')) return
+      if (!confirm('确定要彻底删除这个文档吗？此操作不可恢复！')) return
       try {
-        await documentAPI.delete(doc.id)
+        await documentAPI.delete(doc.id, true)
         loadDocuments()
       } catch (err) {
         alert('删除失败')
