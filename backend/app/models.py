@@ -23,7 +23,8 @@ class User(Base):
     
     documents = relationship("Document", back_populates="owner", cascade="all, delete-orphan")
     permissions = relationship("DocumentPermission", back_populates="user", cascade="all, delete-orphan")
-    comments = relationship("Comment", back_populates="author", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="author", foreign_keys="[Comment.author_id]", cascade="all, delete-orphan")
+    resolved_comments = relationship("Comment", back_populates="resolver", foreign_keys="[Comment.resolved_by]")
 
 class Document(Base):
     __tablename__ = "documents"
@@ -74,4 +75,4 @@ class Comment(Base):
     document = relationship("Document", back_populates="comments")
     author = relationship("User", back_populates="comments", foreign_keys=[author_id])
     parent = relationship("Comment", remote_side=[id], backref="replies")
-    resolver = relationship("User", foreign_keys=[resolved_by])
+    resolver = relationship("User", back_populates="resolved_comments", foreign_keys=[resolved_by])
